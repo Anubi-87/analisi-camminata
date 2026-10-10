@@ -95,11 +95,25 @@
   .gruppo .bottone { border: 0; border-radius: 0; background: var(--superficie-alta); }
   .gruppo .bottone + .bottone { border-left: 1px solid var(--bordo); }
   .gruppo .bottone.attivo { background: var(--testo); color: var(--sfondo); }
-  .interruttore { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; margin-left: auto; cursor: pointer; }
+  .interruttori { display: inline-flex; gap: 16px; margin-left: auto; }
+  .interruttore { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; cursor: pointer; }
   .interruttore input { width: 20px; height: 20px; accent-color: var(--accento); }
 
   .legenda { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; font-size: 14px; color: var(--testo-tenue); }
   .pallino { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+  #pagella { margin-top: 20px; }
+  #pagella h2 { font-size: 18px; margin: 0 0 4px; }
+  .voce { display: flex; gap: 12px; padding: 14px 0; border-top: 1px solid var(--bordo); }
+  .voce:first-of-type { margin-top: 12px; }
+  .voce h3 { font-size: 16px; margin: 0 0 4px; }
+  .voce p { margin: 0; font-size: 15px; line-height: 1.45; }
+  .voce .dettaglio { color: var(--testo-tenue); font-size: 13px; margin-top: 4px; }
+  .voce .vai { margin-top: 10px; }
+  .semaforo { flex: none; width: 14px; height: 14px; border-radius: 50%; margin-top: 4px; background: var(--bordo); }
+  .voce.verde .semaforo { background: var(--ok); }
+  .voce.giallo .semaforo { background: var(--attenzione); }
+  .voce.rosso .semaforo { background: var(--errore); }
 
   #qualita { margin-top: 12px; }
   #qualita p { margin: 4px 0; font-size: 14px; line-height: 1.5; }
@@ -114,7 +128,7 @@
 <main>
   <header>
     <h1>Analisi camminata</h1>
-    <p class="sottotitolo">Prototipo · tappa 1: scheletro sul video</p>
+    <p class="sottotitolo">Prototipo · tappa 2: misure con semaforo</p>
   </header>
 
   <section id="passo-carica" class="scheda">
@@ -168,7 +182,10 @@
           <button class="bottone piccolo" type="button" data-velocita="0.5">0,5×</button>
           <button class="bottone piccolo attivo" type="button" data-velocita="1">1×</button>
         </div>
-        <label class="interruttore"><input id="mostra-scheletro" type="checkbox" checked> Scheletro</label>
+        <span class="interruttori">
+          <label class="interruttore"><input id="mostra-scheletro" type="checkbox" checked> Scheletro</label>
+          <label class="interruttore"><input id="mostra-misure" type="checkbox" checked> Misure</label>
+        </span>
       </div>
       <div class="riga-pulsanti">
         <button id="bottone-analizza" class="bottone primario" type="button" disabled>Analizza</button>
@@ -178,9 +195,14 @@
     <div class="legenda">
       <span><span class="pallino" style="background: var(--sinistra)"></span>Lato sinistro della persona</span>
       <span><span class="pallino" style="background: var(--destra)"></span>Lato destro della persona</span>
+      <span><span class="pallino" style="background: var(--ok)"></span>A posto</span>
+      <span><span class="pallino" style="background: var(--attenzione)"></span>Da guardare</span>
+      <span><span class="pallino" style="background: var(--errore)"></span>Fuori norma</span>
+      <span>Anello sul tallone: tocca terra</span>
     </div>
 
     <div id="qualita" hidden></div>
+    <section id="pagella" hidden></section>
   </section>
 
   <footer id="stato-modello">Preparo il riconoscimento del corpo…</footer>

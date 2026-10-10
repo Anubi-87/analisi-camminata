@@ -1,37 +1,16 @@
-// Analisi camminata.
+// Analisi camminata: pagina con un solo video.
 // Carica un video, riconosce il corpo fotogramma per fotogramma con MediaPipe,
 // disegna lo scheletro sopra il video e calcola le misure della camminata.
 // Tutto avviene sul dispositivo: il video non viene mai inviato da nessuna parte.
-import { PoseLandmarker, FilesetResolver } from "./libs/vision_bundle.mjs";
-import { calcolaMisure } from "./misure.js";
+import {
+  ANALISI_FPS, preparaRiconoscimento, analizzaVideo, nomeDelegato,
+  tempoCasella, casellaDi, numeroCaselle,
+} from "./riconoscimento.js?v=202610102132";
+import { disegnaScheletro, calcolaLampi, PUNTO, SOGLIA_VISIBILITA } from "./disegno.js?v=202610102132";
+import { calcolaMisure } from "./misure.js?v=202610102132";
+import { calcolaImpronta, leggiAnalisi, salvaAnalisi } from "./archivio.js?v=202610102132";
 
-const ANALISI_FPS = 30;          // fotogrammi analizzati per ogni secondo di video
-const SOGLIA_VISIBILITA = 0.5;   // sotto questa soglia un punto non si disegna
-const LATO_MAX_TELA = 1920;      // limite di risoluzione del disegno (video 4K)
-const PERCORSO_WASM = "./libs/wasm";
-const PERCORSO_MODELLO = "./libs/modelli/pose_landmarker_full.task";
-
-// Indici dei punti nel modello MediaPipe. Sinistra e destra sono quelle della persona.
-const PUNTO = {
-  naso: 0,
-  spalla: { sx: 11, dx: 12 },
-  gomito: { sx: 13, dx: 14 },
-  polso: { sx: 15, dx: 16 },
-  anca: { sx: 23, dx: 24 },
-  ginocchio: { sx: 25, dx: 26 },
-  caviglia: { sx: 27, dx: 28 },
-  tallone: { sx: 29, dx: 30 },
-  punta: { sx: 31, dx: 32 },
-};
-const SEGMENTI_LATO = [
-  ["spalla", "gomito"], ["gomito", "polso"],
-  ["spalla", "anca"], ["anca", "ginocchio"], ["ginocchio", "caviglia"],
-  ["caviglia", "tallone"], ["tallone", "punta"], ["caviglia", "punta"],
-];
-const PUNTI_LATO = ["spalla", "gomito", "polso", "anca", "ginocchio", "caviglia", "tallone", "punta"];
-const COLORE = { sx: "#4da3ff", dx: "#ff9f43", centro: "rgba(255,255,255,0.9)" };
-const SEMAFORO = { verde: "#3ddc84", giallo: "#ffd166", rosso: "#ff6b6b" };
-const DURATA_LAMPO = 6; // fotogrammi in cui si evidenzia il tallone che tocca terra
+const LATO_MAX_TELA = 1920; // limite di risoluzione del disegno (video 4K)
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -59,19 +38,19 @@ const el = {
   mostraScheletro: $("mostra-scheletro"),
   mostraMisure: $("mostra-misure"),
   bottoneAnalizza: $("bottone-analizza"),
+  archivio: $("archivio"),
   qualita: $("qualita"),
   pagella: $("pagella"),
   statoModello: $("stato-modello"),
 };
 
 const stato = {
-  fileset: null,
-  bufferModello: null,
-  delegato: null,       // "GPU" o "CPU", deciso alla prima creazione
   modelloPronto: false,
   videoPronto: false,
   urlVideo: null,
-  campioni: [],         // per ogni fotogramma analizzato: { t, punti, mondo } oppure null
+  file: null,
+  impronta: null,       // Promise dell'impronta del video, per l'archivio
+  campioni: [],         // per ogni fotogramma analizzato: { punti } oppure null
   misure: null,         // risultato di calcolaMisure
   lampi: [],            // per fotogramma: talloni appena appoggiati { sx, dx }
   analizzato: false,
@@ -82,19 +61,10 @@ window.__analisi = stato; // comodo per il debug dalla console
 
 // ---------- Riconoscimento del corpo ----------
 
-async function preparaRiconoscimento() {
+async function avviaRiconoscimento() {
   mostraStatoModello("Preparo il riconoscimento del corpo…");
   try {
-    const [fileset, risposta] = await Promise.all([
-      FilesetResolver.forVisionTasks(PERCORSO_WASM),
-      fetch(PERCORSO_MODELLO),
-    ]);
-    if (!risposta.ok) throw new Error(`modello non trovato (${risposta.status})`);
-    stato.fileset = fileset;
-    stato.bufferModello = new Uint8Array(await risposta.arrayBuffer());
-    // Una creazione di prova scopre subito se la scheda grafica funziona
-    const prova = await creaRiconoscitore();
-    prova.close();
+    await preparaRiconoscimento();
     stato.modelloPronto = true;
     mostraStatoModello(`Riconoscimento del corpo pronto (${nomeDelegato()}).`, "ok");
   } catch (errore) {
@@ -103,31 +73,6 @@ async function preparaRiconoscimento() {
   }
   aggiornaInterfaccia();
 }
-
-async function creaRiconoscitore() {
-  const tentativi = stato.delegato ? [stato.delegato] : ["GPU", "CPU"];
-  let ultimoErrore;
-  for (const delegato of tentativi) {
-    try {
-      const riconoscitore = await PoseLandmarker.createFromOptions(stato.fileset, {
-        baseOptions: { modelAssetBuffer: stato.bufferModello.slice(), delegate: delegato },
-        runningMode: "VIDEO",
-        numPoses: 1,
-        minPoseDetectionConfidence: 0.5,
-        minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-      stato.delegato = delegato;
-      return riconoscitore;
-    } catch (errore) {
-      console.warn(`Delegato ${delegato} non disponibile`, errore);
-      ultimoErrore = errore;
-    }
-  }
-  throw ultimoErrore;
-}
-
-const nomeDelegato = () => (stato.delegato === "GPU" ? "scheda grafica" : "processore");
 
 // ---------- Caricamento del video ----------
 
@@ -140,6 +85,8 @@ el.inputFile.addEventListener("change", () => {
 function caricaVideo(file) {
   if (stato.urlVideo) URL.revokeObjectURL(stato.urlVideo);
   stato.urlVideo = URL.createObjectURL(file);
+  stato.file = file;
+  stato.impronta = calcolaImpronta(file);
   azzeraRisultati();
   stato.videoPronto = false;
   el.nomeFile.textContent = file.name;
@@ -151,7 +98,7 @@ function caricaVideo(file) {
   aggiornaInterfaccia();
 }
 
-el.video.addEventListener("loadedmetadata", () => {
+el.video.addEventListener("loadedmetadata", async () => {
   const { videoWidth: l, videoHeight: a, duration } = el.video;
   const scala = Math.min(1, LATO_MAX_TELA / Math.max(l, a));
   el.tela.width = Math.round(l * scala);
@@ -164,6 +111,7 @@ el.video.addEventListener("loadedmetadata", () => {
   aggiornaTempo(0);
   disegna(0);
   aggiornaInterfaccia();
+  await recuperaDallArchivio();
 });
 
 el.video.addEventListener("error", () => {
@@ -173,6 +121,21 @@ el.video.addEventListener("error", () => {
   aggiornaInterfaccia();
 });
 
+// Se questo video è già stato analizzato su questo telefono, l'analisi è pronta subito
+async function recuperaDallArchivio() {
+  const file = stato.file;
+  const voce = await leggiAnalisi(await stato.impronta);
+  if (!voce || file !== stato.file || stato.inAnalisi || stato.analizzato) return;
+  if (voce.campioni.length !== numeroCaselle(el.video.duration)) return;
+  stato.campioni = voce.campioni;
+  completaAnalisi();
+  const data = new Date(voce.data).toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" });
+  el.archivio.textContent = `Analisi già fatta il ${data}: recuperata dalla memoria del telefono.`;
+  el.archivio.hidden = false;
+  aggiornaInterfaccia();
+  disegna(el.video.currentTime);
+}
+
 // ---------- Analisi fotogramma per fotogramma ----------
 
 el.bottoneAnalizza.addEventListener("click", analizza);
@@ -181,66 +144,46 @@ el.bottoneAnnulla.addEventListener("click", () => { stato.annulla = true; });
 async function analizza() {
   if (stato.inAnalisi || !stato.modelloPronto || !stato.videoPronto) return;
   const video = el.video;
-  const durata = video.duration;
-  if (!isFinite(durata) || durata <= 0) return;
+  if (!isFinite(video.duration) || video.duration <= 0) return;
 
   stato.inAnalisi = true;
   stato.annulla = false;
   azzeraRisultati();
   aggiornaInterfaccia();
 
-  // Su iPhone il video va "sbloccato" con un play prima di poter saltare tra i fotogrammi
-  try { await video.play(); } catch { /* va bene anche se rifiuta */ }
-  video.pause();
-
-  const totale = Math.ceil(durata * ANALISI_FPS - 1e-9);
   const inizio = performance.now();
-  let riconoscitore = null;
-  let completata = false;
+  let campioni = null;
   try {
-    riconoscitore = await creaRiconoscitore();
-    for (let i = 0; i < totale; i++) {
-      if (stato.annulla) break;
-      const t = tempoCasella(i, durata);
-      const timestamp = Math.round((i * 1000) / ANALISI_FPS);
-      await vaiAlFotogramma(t);
-      let risultato;
-      try {
-        risultato = riconoscitore.detectForVideo(video, timestamp);
-      } catch (errore) {
-        // Su alcuni telefoni la scheda grafica si rompe al primo uso: si ripiega sul processore
-        if (stato.delegato !== "GPU") throw errore;
-        console.warn("La scheda grafica non regge, passo al processore", errore);
-        riconoscitore.close();
-        stato.delegato = "CPU";
-        riconoscitore = await creaRiconoscitore();
-        risultato = riconoscitore.detectForVideo(video, timestamp);
-        mostraStatoModello(`Riconoscimento del corpo pronto (${nomeDelegato()}).`, "ok");
-      }
-      stato.campioni[i] = estraiCampione(t, risultato);
-      disegna(t);
-      aggiornaAvanzamento(i + 1, totale, inizio);
-    }
-    completata = !stato.annulla;
+    campioni = await analizzaVideo(video, {
+      annullata: () => stato.annulla,
+      dopoFotogramma: (i, totale, t, parziali) => {
+        // lo scheletro si vede comparire mentre l'analisi avanza
+        disegnaScheletro(el.tela, { campione: el.mostraScheletro.checked ? parziali[i] : null });
+        aggiornaAvanzamento(i + 1, totale, inizio);
+      },
+      cambioDelegato: () => mostraStatoModello(`Riconoscimento del corpo pronto (${nomeDelegato()}).`, "ok"),
+    });
   } catch (errore) {
     console.error(errore);
     mostraStatoModello("L'analisi si è interrotta per un errore. Riprova; se capita ancora, ricarica la pagina.", "errore");
   } finally {
-    riconoscitore?.close();
     stato.inAnalisi = false;
   }
 
-  if (completata) {
-    stato.analizzato = true;
-    mostraQualita();
-    preparaMisure();
-  } else {
-    stato.campioni = [];
+  if (campioni) {
+    stato.campioni = campioni;
+    completaAnalisi();
+    salvaAnalisi({
+      impronta: await stato.impronta,
+      nome: stato.file?.name,
+      durata: video.duration,
+      larghezza: video.videoWidth,
+      altezza: video.videoHeight,
+      campioni,
+    });
   }
   aggiornaInterfaccia();
-  await vaiAlFotogramma(0);
-  disegna(0);
-  aggiornaTempo(0);
+  video.currentTime = tempoCasella(0, video.duration);
 }
 
 function azzeraRisultati() {
@@ -248,9 +191,16 @@ function azzeraRisultati() {
   stato.misure = null;
   stato.lampi = [];
   stato.analizzato = false;
+  el.archivio.hidden = true;
   el.qualita.hidden = true;
   el.pagella.hidden = true;
   el.pagella.innerHTML = "";
+}
+
+function completaAnalisi() {
+  stato.analizzato = true;
+  mostraQualita();
+  preparaMisure();
 }
 
 function preparaMisure() {
@@ -267,53 +217,8 @@ function preparaMisure() {
     el.pagella.hidden = false;
     return;
   }
-  // i talloni che toccano terra si evidenziano per qualche fotogramma
-  stato.lampi = stato.campioni.map(() => ({ sx: false, dx: false }));
-  for (const lato of ["sx", "dx"]) {
-    for (const volo of stato.misure.voli[lato]) {
-      for (let i = volo.atterraggio; i < Math.min(stato.lampi.length, volo.atterraggio + DURATA_LAMPO); i++) {
-        stato.lampi[i][lato] = true;
-      }
-    }
-  }
+  stato.lampi = calcolaLampi(stato.misure, stato.campioni.length);
   mostraPagella();
-}
-
-// Ogni fotogramma analizzato occupa una "casella" di 1/30 di secondo. Si mira al centro
-// della casella: saltando esattamente sul bordo, per arrotondamento, a volte il video
-// ricade sul fotogramma precedente e uno viene perso.
-const tempoCasella = (i, durata) => Math.min((i + 0.5) / ANALISI_FPS, durata - 0.001);
-const casellaDi = (t) => Math.floor(t * ANALISI_FPS + 1e-3);
-
-// Porta il video al tempo t e aspetta che il fotogramma sia disponibile.
-function vaiAlFotogramma(t) {
-  const video = el.video;
-  return new Promise((resolve) => {
-    let finito = false;
-    const chiudi = () => {
-      if (finito) return;
-      finito = true;
-      clearTimeout(limite);
-      video.removeEventListener("seeked", alSalto);
-      video.removeEventListener("canplay", chiudi);
-      resolve();
-    };
-    const alSalto = () => {
-      // HAVE_CURRENT_DATA: l'immagine di quel momento è già decodificata
-      if (video.readyState >= 2) chiudi();
-      else video.addEventListener("canplay", chiudi);
-    };
-    const limite = setTimeout(chiudi, 3000);
-    video.addEventListener("seeked", alSalto);
-    video.currentTime = t;
-  });
-}
-
-function estraiCampione(t, risultato) {
-  if (!risultato.landmarks?.length) return null;
-  const punti = risultato.landmarks[0].map((p) => ({ x: p.x, y: p.y, z: p.z, v: p.visibility ?? 1 }));
-  const mondo = risultato.worldLandmarks?.[0]?.map((p) => ({ x: p.x, y: p.y, z: p.z })) ?? null;
-  return { t, punti, mondo };
 }
 
 function aggiornaAvanzamento(fatti, totale, inizio) {
@@ -394,129 +299,22 @@ el.pagella.addEventListener("click", (evento) => {
   el.cornice.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// ---------- Disegno dello scheletro ----------
+// ---------- Disegno ----------
 
 function disegna(t) {
-  const ctx = el.tela.getContext("2d");
-  const L = el.tela.width;
-  const A = el.tela.height;
-  ctx.clearRect(0, 0, L, A);
-  if (!el.mostraScheletro.checked || !stato.campioni.length) return;
-  const indice = Math.min(stato.campioni.length - 1, Math.max(0, casellaDi(t)));
-  const c = stato.campioni[indice];
-  if (!c) return;
-  // misure di questo fotogramma: solo mentre la persona cammina dritta
+  if (!el.mostraScheletro.checked || !stato.campioni.length) {
+    disegnaScheletro(el.tela, { campione: null });
+    return;
+  }
+  const i = Math.min(stato.campioni.length - 1, Math.max(0, casellaDi(t)));
   const conMisure = el.mostraMisure.checked;
-  const f = conMisure ? stato.misure?.fotogrammi[indice] : null;
-  const misura = f?.valido && f.inCammino ? f : null;
-  const lampo = conMisure ? stato.lampi[indice] : null;
-  const coloreLivello = (liv) => (liv ? SEMAFORO[liv] : COLORE.centro);
-
-  const spessore = Math.max(2, Math.min(L, A) / 140);
-  const visibile = (i) => c.punti[i].v >= SOGLIA_VISIBILITA;
-  const pos = (i) => [c.punti[i].x * L, c.punti[i].y * A];
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  // Ogni linea ha un bordo scuro sotto, così si legge su qualsiasi sfondo
-  const tratto = (punti, colore, tratteggio = []) => {
-    for (const [larghezza, stile] of [[spessore + 3, "rgba(0,0,0,0.55)"], [spessore, colore]]) {
-      ctx.beginPath();
-      ctx.setLineDash(tratteggio.map((d) => d * spessore));
-      ctx.lineWidth = larghezza;
-      ctx.strokeStyle = stile;
-      punti.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-  };
-  const linea = (a, b, colore) => {
-    if (visibile(a) && visibile(b)) tratto([pos(a), pos(b)], colore);
-  };
-  const cerchio = ([x, y], raggio, colore, riempimento = "#fff") => {
-    ctx.beginPath();
-    ctx.arc(x, y, raggio, 0, Math.PI * 2);
-    ctx.fillStyle = riempimento;
-    ctx.fill();
-    ctx.lineWidth = Math.max(2, spessore * 0.6);
-    ctx.strokeStyle = colore;
-    ctx.stroke();
-  };
-  // Cartellino col valore di una misura, sul colore del semaforo
-  const corpoTesto = Math.round(Math.max(12, Math.min(L, A) / 26));
-  const etichetta = (testo, colore, x, y, versoSinistra) => {
-    ctx.font = `600 ${corpoTesto}px -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
-    const larghezza = ctx.measureText(testo).width + corpoTesto * 0.8;
-    const altezza = corpoTesto * 1.45;
-    const x0 = Math.min(Math.max(2, versoSinistra ? x - larghezza : x), L - larghezza - 2);
-    const y0 = Math.min(Math.max(2, y - altezza / 2), A - altezza - 2);
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(x0, y0, larghezza, altezza, altezza / 3);
-    else ctx.rect(x0, y0, larghezza, altezza);
-    ctx.fillStyle = colore;
-    ctx.fill();
-    ctx.fillStyle = "#11140a";
-    ctx.textBaseline = "middle";
-    ctx.fillText(testo, x0 + corpoTesto * 0.4, y0 + altezza / 2);
-  };
-  const gradiTesto = (v) => `${Math.round(Math.abs(v))}°`;
-  const margine = spessore * 3;
-
-  // Centro: linea delle spalle, linea del bacino e asse del busto (tratteggiato)
-  linea(PUNTO.spalla.sx, PUNTO.spalla.dx, misura ? coloreLivello(misura.livelli.spalle) : COLORE.centro);
-  linea(PUNTO.anca.sx, PUNTO.anca.dx, misura ? coloreLivello(misura.livelli.bacino) : COLORE.centro);
-  const busto = [PUNTO.spalla.sx, PUNTO.spalla.dx, PUNTO.anca.sx, PUNTO.anca.dx];
-  if (busto.every(visibile)) {
-    const medio = (a, b) => [(pos(a)[0] + pos(b)[0]) / 2, (pos(a)[1] + pos(b)[1]) / 2];
-    tratto([medio(PUNTO.spalla.sx, PUNTO.spalla.dx), medio(PUNTO.anca.sx, PUNTO.anca.dx)],
-      misura ? coloreLivello(misura.livelli.busto) : COLORE.centro, [2, 2]);
-  }
-
-  // Lati sinistro e destro
-  for (const lato of ["sx", "dx"]) {
-    for (const [a, b] of SEGMENTI_LATO) linea(PUNTO[a][lato], PUNTO[b][lato], COLORE[lato]);
-  }
-  for (const lato of ["sx", "dx"]) {
-    const livelloGinocchio = misura?.livelli[lato === "sx" ? "ginocchioSx" : "ginocchioDx"];
-    for (const nome of PUNTI_LATO) {
-      const i = PUNTO[nome][lato];
-      if (!visibile(i)) continue;
-      // il ginocchio in appoggio prende il colore del semaforo
-      const riempimento = nome === "ginocchio" && livelloGinocchio ? SEMAFORO[livelloGinocchio] : "#fff";
-      // il tallone più grande: è il punto che conta per l'appoggio
-      const raggio = spessore * (nome === "tallone" ? 1.6 : nome === "ginocchio" && livelloGinocchio ? 1.5 : 1.1);
-      cerchio(pos(i), raggio, COLORE[lato], riempimento);
-    }
-    // tallone che ha appena toccato terra: un anello attorno
-    if (lampo?.[lato] && visibile(PUNTO.tallone[lato])) {
-      const [x, y] = pos(PUNTO.tallone[lato]);
-      ctx.beginPath();
-      ctx.arc(x, y, spessore * 4, 0, Math.PI * 2);
-      ctx.lineWidth = spessore * 0.9;
-      ctx.strokeStyle = COLORE[lato];
-      ctx.stroke();
-    }
-  }
-  if (visibile(PUNTO.naso)) cerchio(pos(PUNTO.naso), spessore * 1.3, COLORE.centro);
-
-  // I valori scritti accanto: busto a sinistra, spalle e bacino a destra, ginocchia all'esterno
-  if (misura && busto.every(visibile)) {
-    const spallaSinistraImmagine = pos(PUNTO.spalla.sx)[0] < pos(PUNTO.spalla.dx)[0] ? "sx" : "dx";
-    const spallaDestraImmagine = spallaSinistraImmagine === "sx" ? "dx" : "sx";
-    const [xs, ys] = pos(PUNTO.spalla[spallaSinistraImmagine]);
-    const [xd, yd] = pos(PUNTO.spalla[spallaDestraImmagine]);
-    const [xa, ya] = pos(PUNTO.anca[spallaDestraImmagine]);
-    etichetta(`Busto ${gradiTesto(misura.inclinazione)}`, coloreLivello(misura.livelli.busto), xs - margine, ys, true);
-    etichetta(`Spalle ${gradiTesto(misura.spalle)}`, coloreLivello(misura.livelli.spalle), xd + margine, yd, false);
-    etichetta(`Bacino ${gradiTesto(misura.bacino)}`, coloreLivello(misura.livelli.bacino), xa + margine, ya, false);
-    for (const lato of ["sx", "dx"]) {
-      const liv = misura.livelli[lato === "sx" ? "ginocchioSx" : "ginocchioDx"];
-      if (!liv || !visibile(PUNTO.ginocchio[lato])) continue;
-      const [x, y] = pos(PUNTO.ginocchio[lato]);
-      const aSinistra = lato === spallaSinistraImmagine;
-      etichetta(gradiTesto(misura.ginocchio[lato]), SEMAFORO[liv], aSinistra ? x - margine : x + margine, y, aSinistra);
-    }
-  }
+  const f = conMisure ? stato.misure?.fotogrammi[i] : null;
+  disegnaScheletro(el.tela, {
+    campione: stato.campioni[i],
+    // le misure si mostrano solo mentre la persona cammina dritta
+    misura: f?.valido && f.inCammino ? f : null,
+    lampo: conMisure ? stato.lampi[i] : null,
+  });
 }
 
 // ---------- Riproduzione ----------
@@ -570,7 +368,7 @@ el.cursore.addEventListener("input", () => {
 
 const spostaDiFotogrammi = (n) => {
   el.video.pause();
-  const ultima = Math.ceil(el.video.duration * ANALISI_FPS - 1e-9) - 1;
+  const ultima = numeroCaselle(el.video.duration) - 1;
   const casella = Math.min(Math.max(0, casellaDi(el.video.currentTime) + n), ultima);
   el.video.currentTime = tempoCasella(casella, el.video.duration);
 };
@@ -631,4 +429,4 @@ function mostraStatoModello(testo, tipo = "") {
 const formattaSecondi = (s) => (isFinite(s) ? s.toFixed(1).replace(".", ",") : "0,0");
 
 aggiornaInterfaccia();
-preparaRiconoscimento();
+avviaRiconoscimento();

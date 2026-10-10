@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Confronto camminata</title>
+<link rel="stylesheet" href="./stile.css?v=202610102132">
+</head>
+<body>
+<main>
+  <header>
+    <div class="riga-titolo">
+      <h1>Confronto prima/dopo</h1>
+      <a class="bottone piccolo" href="./index.html">Un video solo</a>
+    </div>
+    <p class="sottotitolo">Due video affiancati e le stesse misure a confronto. Col telefono in orizzontale si vedono meglio.</p>
+  </header>
+
+  <section class="scheda">
+    <div id="coppia" class="coppia"></div>
+
+    <div id="comandi-comuni" class="comandi-comuni">
+      <div class="riga-tempo">
+        <input id="cursore" type="range" min="0" max="0" step="0.001" value="0" aria-label="Posizione nei due video">
+        <span id="etichetta-tempo">0,0 s</span>
+      </div>
+      <div class="riga-pulsanti">
+        <div class="gruppo">
+          <button id="bottone-indietro" class="bottone piccolo" type="button" aria-label="Fotogramma precedente" title="Fotogramma precedente">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2v12H6zM9.5 12 18 18V6z"/></svg>
+          </button>
+          <button id="bottone-play" class="bottone piccolo" type="button" aria-label="Riproduci" title="Riproduci">
+            <svg id="icona-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="icona-pausa" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+          </button>
+          <button id="bottone-avanti" class="bottone piccolo" type="button" aria-label="Fotogramma successivo" title="Fotogramma successivo">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>
+          </button>
+        </div>
+        <div class="gruppo" id="velocita">
+          <button class="bottone piccolo" type="button" data-velocita="0.25">0,25×</button>
+          <button class="bottone piccolo" type="button" data-velocita="0.5">0,5×</button>
+          <button class="bottone piccolo attivo" type="button" data-velocita="1">1×</button>
+        </div>
+      </div>
+      <div class="riga-pulsanti">
+        <div class="gruppo-appoggi">
+          <span class="nome-appoggio"><span class="pallino" style="background: var(--destra)"></span>Appoggio destro</span>
+          <div class="gruppo">
+            <button class="bottone piccolo" type="button" data-appoggio="dx" data-verso="-1" aria-label="Appoggio destro precedente">‹</button>
+            <button class="bottone piccolo" type="button" data-appoggio="dx" data-verso="1" aria-label="Appoggio destro successivo">›</button>
+          </div>
+        </div>
+        <div class="gruppo-appoggi">
+          <span class="nome-appoggio"><span class="pallino" style="background: var(--sinistra)"></span>Appoggio sinistro</span>
+          <div class="gruppo">
+            <button class="bottone piccolo" type="button" data-appoggio="sx" data-verso="-1" aria-label="Appoggio sinistro precedente">‹</button>
+            <button class="bottone piccolo" type="button" data-appoggio="sx" data-verso="1" aria-label="Appoggio sinistro successivo">›</button>
+          </div>
+        </div>
+      </div>
+      <div class="riga-pulsanti">
+        <button id="bottone-allinea" class="bottone piccolo" type="button">Allinea al primo passo</button>
+        <span class="interruttori">
+          <label class="interruttore"><input id="mostra-scheletro" type="checkbox" checked> Scheletro</label>
+          <label class="interruttore"><input id="mostra-misure" type="checkbox" checked> Misure</label>
+        </span>
+      </div>
+      <p id="nota-allineamento" class="nota" hidden></p>
+    </div>
+
+    <div class="legenda">
+      <span><span class="pallino" style="background: var(--sinistra)"></span>Lato sinistro della persona</span>
+      <span><span class="pallino" style="background: var(--destra)"></span>Lato destro della persona</span>
+      <span><span class="pallino" style="background: var(--ok)"></span>A posto</span>
+      <span><span class="pallino" style="background: var(--attenzione)"></span>Da guardare</span>
+      <span><span class="pallino" style="background: var(--errore)"></span>Fuori norma</span>
+    </div>
+  </section>
+
+  <section id="pagella-confronto" class="scheda" hidden></section>
+
+  <footer id="stato-modello">Preparo il riconoscimento del corpo…</footer>
+</main>
+
+<!-- Un riquadro per ogni video: lo stesso modello usato due volte -->
+<template id="modello-lato">
+  <div class="lato-confronto">
+    <div class="testa-lato">
+      <h2 class="titolo-lato"></h2>
+      <label class="bottone piccolo primario scelta-file">
+        <span class="testo-scelta">Scegli video</span>
+        <input type="file" accept="video/*" hidden>
+      </label>
+    </div>
+    <p class="nome-video">Nessun video scelto</p>
+    <div class="cornice" hidden>
+      <video playsinline muted preload="auto"></video>
+      <canvas></canvas>
+    </div>
+    <div class="avanzamento" hidden><div></div></div>
+    <p class="stato-lato"></p>
+    <button class="bottone piccolo analizza" type="button" hidden>Analizza</button>
+  </div>
+</template>
+
+<script type="module" src="./confronto.js?v=202610102132"></script>
+</body>
+</html>

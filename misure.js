@@ -43,6 +43,18 @@ export function livello(valore, soglia) {
   return a >= soglia.rosso ? "rosso" : a >= soglia.giallo ? "giallo" : "verde";
 }
 
+// Differenza minima tra prima e dopo per parlare di cambiamento: sotto è rumore di misura.
+const CAMBIAMENTO_MIN = { appoggio: 3, busto: 1, spalle: 1, bacino: 1, ginocchia: 2, ondeggiamento: 2 };
+
+// Confronta la stessa misura di due video. Per tutte le misure "meno è meglio".
+export function confrontaVoci(prima, dopo) {
+  if (prima?.valore == null || dopo?.valore == null) return { esito: null };
+  const differenza = dopo.valore - prima.valore;
+  const minimo = CAMBIAMENTO_MIN[prima.chiave] ?? 1;
+  const esito = Math.abs(differenza) < minimo ? "uguale" : differenza < 0 ? "migliorato" : "peggiorato";
+  return { esito, differenza };
+}
+
 export function calcolaMisure(campioni, { larghezza: W, altezza: H, fps }) {
   const n = campioni.length;
 
@@ -206,6 +218,8 @@ function misuraAppoggio(tempi) {
   return {
     ...base,
     livello: livello(differenza, SOGLIE.appoggio),
+    valore: differenza,
+    breve: differenza < SOGLIE.appoggio.giallo ? `pari (${num(differenza, 0)}%)` : `${nomeLato(lato)} +${num(differenza, 0)}%`,
     frase,
     dettaglio: `Passi contati: ${ns + nd}. Tempo misurato da quando il tallone tocca terra a quando tocca terra l'altro.`,
     momento: lungo.inizio,
@@ -223,6 +237,8 @@ function misuraBusto(f, indici) {
   return {
     ...base,
     livello: livello(m, SOGLIE.busto),
+    valore: Math.abs(m),
+    breve: Math.abs(m) < 0.5 ? "dritto" : `${num(Math.abs(m))}° a ${m > 0 ? "sinistra" : "destra"}`,
     frase,
     dettaglio: `Punta massima: ${num(Math.abs(f[peggiore].inclinazione))}° verso ${f[peggiore].inclinazione > 0 ? "sinistra" : "destra"}.`,
     momento: peggiore,
@@ -237,7 +253,14 @@ function misuraSpalle(f, indici) {
   const frase = Math.abs(m) < 0.5
     ? "Le spalle stanno alla stessa altezza."
     : `La spalla ${m > 0 ? "sinistra" : "destra"} sta in media ${num(Math.abs(m))}° più bassa.`;
-  return { ...base, livello: livello(m, SOGLIE.spalle), frase, momento: peggiore };
+  return {
+    ...base,
+    livello: livello(m, SOGLIE.spalle),
+    valore: Math.abs(m),
+    breve: Math.abs(m) < 0.5 ? "pari" : `${num(Math.abs(m))}°, più bassa la ${m > 0 ? "sinistra" : "destra"}`,
+    frase,
+    momento: peggiore,
+  };
 }
 
 // Mentre un piede è in volo, la persona sta in appoggio su una gamba sola: l'altra.
@@ -268,9 +291,12 @@ function misuraBacino(f, voli) {
   const suSx = mediaDi(cadute.sx); // appoggiato a sinistra, scende l'anca destra
   const suDx = mediaDi(cadute.dx);
   const descrivi = (v, anca) => (v > 0 ? `l'anca ${anca} scende di ${num(v)}°` : `l'anca ${anca} non scende`);
+  const caduta = Math.max(suSx, suDx, 0);
   return {
     ...base,
-    livello: livello(Math.max(suSx, suDx, 0), SOGLIE.bacino),
+    livello: livello(caduta, SOGLIE.bacino),
+    valore: caduta,
+    breve: caduta < 0.5 ? "non scende" : `scende ${num(caduta)}°`,
     frase: `In appoggio sulla destra ${descrivi(suDx, "sinistra")}; in appoggio sulla sinistra ${descrivi(suSx, "destra")}.`,
     momento: peggiore,
   };
@@ -298,9 +324,12 @@ function misuraGinocchia(f, voli) {
   const ms = mediaDi(valori.sx), md = mediaDi(valori.dx);
   const descrivi = (v, nome) => (Math.abs(v) < 1 ? `il ${nome} resta allineato` : `il ${nome} va ${num(Math.abs(v))}° verso ${v > 0 ? "l'interno" : "l'esterno"}`);
   const maggiore = Math.abs(ms) > Math.abs(md) ? ms : md;
+  const latoMaggiore = maggiore === ms ? "sinistro" : "destro";
   return {
     ...base,
     livello: livello(maggiore, SOGLIE.ginocchio),
+    valore: Math.abs(maggiore),
+    breve: Math.abs(maggiore) < 1 ? "allineate" : `${latoMaggiore} ${num(Math.abs(maggiore))}° ${maggiore > 0 ? "all'interno" : "all'esterno"}`,
     frase: `In appoggio ${descrivi(md, "destro")}, ${descrivi(ms, "sinistro")}.`,
     momento: peggiore,
   };
@@ -329,6 +358,8 @@ function misuraOndeggiamento(f, tratti, fps) {
   return {
     ...base,
     livello: livello(cm, SOGLIE.ondeggiamento),
+    valore: cm,
+    breve: `${num(cm, 0)} cm`,
     frase: `A ogni passo il bacino si sposta di circa ${num(cm, 0)} cm da un lato all'altro.`,
     dettaglio: "Stima in centimetri: conta un busto (spalle-anche) di circa 50 cm.",
     momento: peggiore,
